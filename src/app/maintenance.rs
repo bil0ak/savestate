@@ -60,8 +60,9 @@ impl Savestate {
                 integrations::Agent::Claude => {
                     ui::line(format_args!("  1. Open this project in Claude Code"));
                     ui::line(format_args!("  2. Start a new session"));
+                    ui::line(format_args!("  3. Complete a changed turn"));
                     ui::line(format_args!(
-                        "  3. Run {} after the first checkpoint",
+                        "  4. Run {} after the first completed turn",
                         ui::command("savestate doctor")
                     ));
                 }

@@ -39,7 +39,7 @@ savestate init
 savestate integrate codex  # or: savestate integrate claude
 ```
 
-That is enough to create automatic filesystem checkpoints from supported agent hooks. You can also work manually:
+Both integrations create automatic filesystem checkpoints when a session starts or resumes and after each completed turn that changes project state. Turn checkpoints use the request or final response for readable labels. You can also work manually:
 
 ```sh
 savestate create --label "before the refactor"

@@ -52,6 +52,48 @@ fn agent_retention_is_separate_from_manual_checkpoints() -> Result<()> {
 }
 
 #[test]
+fn claude_turn_checkpoints_use_agent_retention() -> Result<()> {
+    let project = tempdir()?;
+    fs::write(
+        project.path().join(".savestate.toml"),
+        "[retention]\nagent = 1\n",
+    )?;
+    let mut app = App::open(project.path().to_path_buf())?;
+
+    for (turn, contents) in [("first", "one"), ("second", "two")] {
+        let prompt = serde_json::json!({
+            "session_id": "claude-session",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": format!("make the {turn} change")
+        });
+        integrations::handle_claude_hook(
+            &mut app,
+            integrations::HookEvent::UserPrompt,
+            &prompt.to_string(),
+        )?;
+        fs::write(project.path().join("file"), contents)?;
+        let stop = serde_json::json!({
+            "session_id": "claude-session",
+            "hook_event_name": "Stop",
+            "last_assistant_message": "done"
+        });
+        integrations::handle_claude_hook(
+            &mut app,
+            integrations::HookEvent::Stop,
+            &stop.to_string(),
+        )?;
+    }
+
+    let store = Store::open(project.path().join(".savestate"))?;
+    assert_eq!(store.ids()?.len(), 1);
+    assert_eq!(
+        store.load("latest")?.label.as_deref(),
+        Some("Claude · make the second change")
+    );
+    Ok(())
+}
+
+#[test]
 fn pre_restore_checkpoint_never_prunes_the_selected_target() -> Result<()> {
     let project = tempdir()?;
     fs::write(
