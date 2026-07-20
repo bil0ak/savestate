@@ -15,6 +15,14 @@ pub(super) fn sync_directory(path: &Path) -> Result<()> {
     #[cfg(unix)]
     File::open(path)?.sync_all()?;
     #[cfg(not(unix))]
-    let _ = path;
+    {
+        let metadata = fs::metadata(path)?;
+        if !metadata.is_dir() {
+            bail!(
+                "directory sync target is not a directory: {}",
+                path.display()
+            );
+        }
+    }
     Ok(())
 }

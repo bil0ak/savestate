@@ -21,9 +21,8 @@ pub fn clone_or_copy(source: &Path, destination: &Path) -> io::Result<&'static s
             .write(true)
             .create_new(true)
             .open(destination)?;
-        const FICLONE: libc::c_ulong = 0x4004_9409;
         // SAFETY: the ioctl receives valid file descriptors and does not outlive them.
-        if unsafe { libc::ioctl(dst.as_raw_fd(), FICLONE, src.as_raw_fd()) } == 0 {
+        if unsafe { libc::ioctl(dst.as_raw_fd(), libc::FICLONE, src.as_raw_fd()) } == 0 {
             return Ok("linux_ficlone");
         }
         drop(dst);

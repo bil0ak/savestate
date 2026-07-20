@@ -224,23 +224,28 @@ pub(super) fn file_entry(
     let symlink_target = (kind == EntryKind::Symlink)
         .then(|| fs::read_link(live))
         .transpose()?;
-    let mut xattrs = BTreeMap::new();
     #[cfg(unix)]
-    if kind != EntryKind::Symlink {
-        for name in xattr::list(live)
-            .with_context(|| format!("list extended attributes for {}", live.display()))?
-        {
-            if let Some(value) = xattr::get(live, &name)? {
-                let name = name.into_string().map_err(|_| {
-                    anyhow::anyhow!(
-                        "extended attribute name is not valid UTF-8 for {}",
-                        live.display()
-                    )
-                })?;
-                xattrs.insert(name, BASE64.encode(value));
+    let xattrs = {
+        let mut xattrs = BTreeMap::new();
+        if kind != EntryKind::Symlink {
+            for name in xattr::list(live)
+                .with_context(|| format!("list extended attributes for {}", live.display()))?
+            {
+                if let Some(value) = xattr::get(live, &name)? {
+                    let name = name.into_string().map_err(|_| {
+                        anyhow::anyhow!(
+                            "extended attribute name is not valid UTF-8 for {}",
+                            live.display()
+                        )
+                    })?;
+                    xattrs.insert(name, BASE64.encode(value));
+                }
             }
         }
-    }
+        xattrs
+    };
+    #[cfg(not(unix))]
+    let xattrs = BTreeMap::new();
     Ok(FileEntry {
         root_id: root_id.into(),
         path,
