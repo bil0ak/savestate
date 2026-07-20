@@ -1,0 +1,70 @@
+[package]
+name = "savestate"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Verified local checkpoints and rollback for coding-agent sessions"
+license = "MIT"
+readme = "README.md"
+homepage = "https://savestatecli.dev"
+repository = "https://github.com/bil0ak/savestate"
+documentation = "https://docs.rs/savestate"
+keywords = ["checkpoint", "rollback", "backup", "coding-agents", "cli"]
+categories = ["command-line-utilities", "development-tools", "filesystem"]
+publish = ["crates-io"]
+exclude = ["/.cargo/**", "/.github/**", "/.gitignore"]
+
+[dependencies]
+anyhow = "1.0"
+anstream = "1.0"
+anstyle = "1.0"
+base64 = "0.22"
+blake3 = "1.8"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+console = "0.16"
+filetime = "0.2"
+fuzzy-matcher = "0.3"
+globset = "0.4"
+ignore = "0.4"
+libc = "0.2"
+rusqlite = { version = "0.37", features = ["backup", "bundled"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+tempfile = "3.20"
+thiserror = "2"
+toml = "0.9"
+ulid = { version = "1.2", features = ["serde"] }
+url = "2.5"
+walkdir = "2.5"
+fs4 = "0.13"
+percent-encoding = "2"
+
+[target.'cfg(unix)'.dependencies]
+xattr = "1.5"
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[lints.rust]
+unsafe_code = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+# Responsibility-based module splits intentionally share a private parent
+# prelude. The compatibility wrappers also retain their pre-1.0 value-taking
+# signatures; the documented structured facade is the preferred API.
+pedantic = { level = "warn", priority = -1 }
+wildcard_imports = "allow"
+missing_errors_doc = "allow"
+must_use_candidate = "allow"
+needless_pass_by_value = "allow"
+similar_names = "allow"
+# Human-readable byte estimates intentionally trade exact integer precision.
+cast_precision_loss = "allow"

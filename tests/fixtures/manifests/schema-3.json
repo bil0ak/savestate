@@ -1,0 +1,17 @@
+{
+  "schema_version": 3,
+  "id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "created_at": "2024-01-01T00:00:00Z",
+  "label": "schema-v3",
+  "kind": "manual",
+  "project_root": "FIXTURE_ROOT",
+  "platform": "fixture",
+  "engine": "portable",
+  "consistency": "resource-consistent; transactionally-recoverable",
+  "capture_started_at": "2024-01-01T00:00:00Z",
+  "capture_finished_at": "2024-01-01T00:00:01Z",
+  "roots": [{"id":"repo","path":"FIXTURE_ROOT","repository":true,"identity":{"canonical_path":"FIXTURE_ROOT","kind":"directory","device":null,"file_id":null}}],
+  "files": [],
+  "services": [],
+  "capture_scope": {"respect_gitignore":true,"include_ignored":false,"include":[],"exclude":[],"explicitly_included_paths":[],"git_ignore_sources":[],"ignored_boundaries":[]}
+}
