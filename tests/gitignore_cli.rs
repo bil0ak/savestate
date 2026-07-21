@@ -161,6 +161,22 @@ fn integration_completion_explains_codex_trust_and_new_task_requirements() -> Re
 }
 
 #[test]
+fn integration_completion_explains_claude_turn_checkpointing() -> Result<()> {
+    let project = tempdir()?;
+    fs::write(project.path().join(".savestate.toml"), "")?;
+
+    Command::cargo_bin("savestate")?
+        .current_dir(project.path())
+        .args(["integrate", "claude"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("✓ Claude integration installed"))
+        .stdout(predicate::str::contains("Complete a changed turn"))
+        .stdout(predicate::str::contains("after the first completed turn"));
+    Ok(())
+}
+
+#[test]
 fn help_leads_with_the_real_quick_start() -> Result<()> {
     Command::cargo_bin("savestate")?
         .arg("--help")
@@ -371,6 +387,45 @@ fn stop_hook_failures_are_non_blocking_and_always_return_json() -> Result<()> {
         .success()
         .stdout("{}\n")
         .stderr(predicate::str::contains("parse Codex hook input"));
+    Ok(())
+}
+
+#[test]
+fn claude_hooks_keep_protocol_output_machine_readable() -> Result<()> {
+    let project = tempdir()?;
+    fs::write(
+        project.path().join(".savestate.toml"),
+        "[limits]\nwarn_files = 0\nwarn_size = \"2GiB\"\n",
+    )?;
+    Command::cargo_bin("savestate")?
+        .current_dir(project.path())
+        .args(["hook", "claude", "user-prompt"])
+        .write_stdin(
+            r#"{"session_id":"s","hook_event_name":"UserPromptSubmit","prompt":"change a file"}"#,
+        )
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+    fs::write(project.path().join("changed"), "yes")?;
+    Command::cargo_bin("savestate")?
+        .current_dir(project.path())
+        .args(["hook", "claude", "stop"])
+        .write_stdin(
+            r#"{"session_id":"s","hook_event_name":"Stop","last_assistant_message":"done","stop_hook_active":false}"#,
+        )
+        .assert()
+        .success()
+        .stdout("{}\n")
+        .stderr(predicate::str::contains("Warning: checkpoint scope contains"));
+
+    Command::cargo_bin("savestate")?
+        .current_dir(project.path())
+        .args(["hook", "claude", "stop"])
+        .write_stdin("not-json")
+        .assert()
+        .success()
+        .stdout("{}\n")
+        .stderr(predicate::str::contains("parse Claude hook input"));
     Ok(())
 }
 

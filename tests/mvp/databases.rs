@@ -106,7 +106,12 @@ fn hardlinked_sqlite_is_refused_before_checkpoint_publication() -> Result<()> {
 }
 
 #[test]
-fn configured_sqlite_is_untouched_by_automatic_codex_checkpoints() -> Result<()> {
+fn configured_sqlite_is_untouched_by_automatic_agent_checkpoints() -> Result<()> {
+    automatic_agent_checkpoint_excludes_database(Agent::Codex)?;
+    automatic_agent_checkpoint_excludes_database(Agent::Claude)
+}
+
+fn automatic_agent_checkpoint_excludes_database(agent: Agent) -> Result<()> {
     let project = tempdir()?;
     let database = project.path().join("state.sqlite");
     {
@@ -122,22 +127,56 @@ fn configured_sqlite_is_untouched_by_automatic_codex_checkpoints() -> Result<()>
     fs::write(project.path().join("source"), "before")?;
     let mut app = App::open(project.path().to_path_buf())?;
 
-    let prompt = serde_json::json!({
-        "session_id": "sqlite-session",
-        "turn_id": "sqlite-turn",
-        "hook_event_name": "UserPromptSubmit",
-        "prompt": "change source and database"
-    });
-    integrations::handle_codex_hook(&mut app, CodexHookEvent::UserPrompt, &prompt.to_string())?;
+    let prompt = match agent {
+        Agent::Codex => serde_json::json!({
+            "session_id": "sqlite-session",
+            "turn_id": "sqlite-turn",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "change source and database"
+        }),
+        Agent::Claude => serde_json::json!({
+            "session_id": "sqlite-session",
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "change source and database"
+        }),
+    };
+    match agent {
+        Agent::Codex => integrations::handle_codex_hook(
+            &mut app,
+            CodexHookEvent::UserPrompt,
+            &prompt.to_string(),
+        )?,
+        Agent::Claude => integrations::handle_claude_hook(
+            &mut app,
+            integrations::HookEvent::UserPrompt,
+            &prompt.to_string(),
+        )?,
+    };
     fs::write(project.path().join("source"), "after-turn")?;
     Connection::open(&database)?.execute("INSERT INTO items DEFAULT VALUES", [])?;
-    let stop = serde_json::json!({
-        "session_id": "sqlite-session",
-        "turn_id": "sqlite-turn",
-        "hook_event_name": "Stop",
-        "last_assistant_message": "done"
-    });
-    integrations::handle_codex_hook(&mut app, CodexHookEvent::Stop, &stop.to_string())?;
+    let stop = match agent {
+        Agent::Codex => serde_json::json!({
+            "session_id": "sqlite-session",
+            "turn_id": "sqlite-turn",
+            "hook_event_name": "Stop",
+            "last_assistant_message": "done"
+        }),
+        Agent::Claude => serde_json::json!({
+            "session_id": "sqlite-session",
+            "hook_event_name": "Stop",
+            "last_assistant_message": "done"
+        }),
+    };
+    match agent {
+        Agent::Codex => {
+            integrations::handle_codex_hook(&mut app, CodexHookEvent::Stop, &stop.to_string())?
+        }
+        Agent::Claude => integrations::handle_claude_hook(
+            &mut app,
+            integrations::HookEvent::Stop,
+            &stop.to_string(),
+        )?,
+    };
     let store = Store::open(project.path().join(".savestate"))?;
     let automatic = store.load("latest")?;
     assert!(automatic.services.is_empty());

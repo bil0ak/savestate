@@ -12,6 +12,7 @@ use ::ignore::{
     gitignore::{Gitignore, GitignoreBuilder},
 };
 use anyhow::{Context, Result, bail};
+#[cfg(unix)]
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use walkdir::WalkDir;

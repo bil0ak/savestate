@@ -132,7 +132,7 @@ fn restore_refuses_an_external_root_that_changed_type() -> Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[test]
 fn restore_refuses_an_external_root_recreated_at_the_same_path() -> Result<()> {
     let project = tempdir()?;

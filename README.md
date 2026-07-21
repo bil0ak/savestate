@@ -39,7 +39,7 @@ savestate init
 savestate integrate codex  # or: savestate integrate claude
 ```
 
-That is enough to create automatic filesystem checkpoints from supported agent hooks. You can also work manually:
+Both integrations create automatic filesystem checkpoints when a session starts or resumes and after each completed turn that changes project state. Turn checkpoints use the request or final response for readable labels. You can also work manually:
 
 ```sh
 savestate create --label "before the refactor"
@@ -63,7 +63,25 @@ Run `savestate` without a command for project-aware guidance. Run `savestate --h
 
 Download a release archive, verify it against `SHA256SUMS`, and place `savestate` on your `PATH`.
 
-To install from source:
+macOS and Linux:
+
+```sh
+curl -fsSL https://savestatecli.dev/install.sh | sh
+```
+
+Windows x64 (experimental):
+
+```powershell
+irm https://savestatecli.dev/install.ps1 | iex
+```
+
+Cargo:
+
+```sh
+cargo install savestate --locked
+```
+
+To build from a checkout instead:
 
 ```sh
 git clone https://github.com/bil0ak/savestate.git
@@ -72,6 +90,40 @@ cargo install --path . --locked
 ```
 
 Savestate requires Rust 1.85 or newer when building from source.
+
+## Uninstall
+
+Agent hooks are project-local. In each project where you enabled them, remove the managed hooks before uninstalling the executable:
+
+```sh
+savestate integrate codex --remove
+savestate integrate claude --remove
+```
+
+Then use the uninstall method matching the installation method.
+
+macOS and Linux:
+
+```sh
+curl -fsSL https://savestatecli.dev/uninstall.sh | sh
+```
+
+Windows:
+
+```powershell
+irm https://savestatecli.dev/uninstall.ps1 | iex
+```
+
+Cargo:
+
+```sh
+cargo uninstall savestate
+```
+
+Uninstalling removes the executable and installer-owned Windows `PATH` entry only. It never removes project `.savestate` stores or `.savestate.toml` configuration. Delete those project paths manually only when you no longer need their checkpoints.
+
+Savestate sends no installation, uninstallation, usage, or project telemetry.
+Maintainers can run `scripts/distribution-stats.py` to view aggregate GitHub release-asset downloads, crates.io downloads, and uninstall-script requests. These counts are not unique or confirmed installations.
 
 ## What gets checkpointed?
 

@@ -47,6 +47,14 @@ struct CodexHookInput {
     last_assistant_message: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ClaudeHookInput {
+    session_id: String,
+    hook_event_name: String,
+    prompt: Option<String>,
+    last_assistant_message: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct TurnContext {
     prompt: String,
@@ -72,12 +80,6 @@ pub fn configure(root: &Path, agent: Agent, remove: bool) -> Result<PathBuf> {
         .as_object_mut()
         .context("hooks must be a JSON object")?;
 
-    let agent_name = match agent {
-        Agent::Claude => "claude",
-        Agent::Codex => "codex",
-    };
-    let base_command = format!("savestate --require-project hook {agent_name} session-start");
-
     {
         let session = hooks.entry("SessionStart").or_insert_with(|| json!([]));
         let session = session
@@ -89,46 +91,38 @@ pub fn configure(root: &Path, agent: Agent, remove: bool) -> Result<PathBuf> {
                 "matcher": "startup|resume",
                 "hooks": [{
                     "type": "command",
-                    "command": format!(
-                        "{base_command} # {SESSION_MARKER}"
-                    )
+                    "command": managed_command(agent, HookEvent::SessionStart)
                 }]
             }));
         }
     }
 
-    if matches!(agent, Agent::Codex) {
-        {
-            let prompt = hooks.entry("UserPromptSubmit").or_insert_with(|| json!([]));
-            let prompt = prompt
-                .as_array_mut()
-                .context("UserPromptSubmit hooks must be an array")?;
-            remove_managed_hooks(prompt, PROMPT_MARKER);
-            if !remove {
-                prompt.push(json!({
-                    "hooks": [{
-                        "type": "command",
-                        "command": format!(
-                            "savestate --require-project hook codex user-prompt # {PROMPT_MARKER}"
-                        )
-                    }]
-                }));
-            }
-        }
-
-        let stop = hooks.entry("Stop").or_insert_with(|| json!([]));
-        let stop = stop.as_array_mut().context("Stop hooks must be an array")?;
-        remove_managed_hooks(stop, TURN_MARKER);
+    {
+        let prompt = hooks.entry("UserPromptSubmit").or_insert_with(|| json!([]));
+        let prompt = prompt
+            .as_array_mut()
+            .context("UserPromptSubmit hooks must be an array")?;
+        remove_managed_hooks(prompt, PROMPT_MARKER);
         if !remove {
-            stop.push(json!({
+            prompt.push(json!({
                 "hooks": [{
                     "type": "command",
-                    "command": format!(
-                        "savestate --require-project hook codex stop # {TURN_MARKER}"
-                    )
+                    "command": managed_command(agent, HookEvent::UserPrompt)
                 }]
             }));
         }
+    }
+
+    let stop = hooks.entry("Stop").or_insert_with(|| json!([]));
+    let stop = stop.as_array_mut().context("Stop hooks must be an array")?;
+    remove_managed_hooks(stop, TURN_MARKER);
+    if !remove {
+        stop.push(json!({
+            "hooks": [{
+                "type": "command",
+                "command": managed_command(agent, HookEvent::Stop)
+            }]
+        }));
     }
     atomic_write(&settings, &serde_json::to_vec_pretty(&value)?)?;
     Ok(settings)
@@ -173,29 +167,16 @@ pub fn is_configured(root: &Path, agent: Agent) -> Result<bool> {
     }
     let value: Value = serde_json::from_slice(&fs::read(&path)?)
         .with_context(|| format!("parse {}", path.display()))?;
-    let agent_name = match agent {
-        Agent::Claude => "claude",
-        Agent::Codex => "codex",
-    };
-    let session =
-        format!("savestate --require-project hook {agent_name} session-start # {SESSION_MARKER}");
-    let configured = has_managed_command(&value, "SessionStart", &session)
-        && match agent {
-            Agent::Claude => true,
-            Agent::Codex => {
-                has_managed_command(
-                    &value,
-                    "UserPromptSubmit",
-                    &format!(
-                        "savestate --require-project hook codex user-prompt # {PROMPT_MARKER}"
-                    ),
-                ) && has_managed_command(
-                    &value,
-                    "Stop",
-                    &format!("savestate --require-project hook codex stop # {TURN_MARKER}"),
-                )
-            }
-        };
+    let configured =
+        has_managed_command(
+            &value,
+            "SessionStart",
+            &managed_command(agent, HookEvent::SessionStart),
+        ) && has_managed_command(
+            &value,
+            "UserPromptSubmit",
+            &managed_command(agent, HookEvent::UserPrompt),
+        ) && has_managed_command(&value, "Stop", &managed_command(agent, HookEvent::Stop));
     Ok(configured)
 }
 
@@ -232,7 +213,7 @@ pub fn run_hook(app: &mut App, agent: Agent, event: HookEvent) -> Result<Option<
             )
             .map(|_| None),
         (Agent::Codex, event) => handle_codex_hook(app, event, &input),
-        (Agent::Claude, _) => bail!("Claude only supports the session-start Savestate hook"),
+        (Agent::Claude, event) => handle_claude_hook(app, event, &input),
     };
     match &result {
         Ok(_) => record_hook_health(app, event, true, "checkpoint hook completed")?,
@@ -253,41 +234,80 @@ pub fn handle_codex_hook(app: &mut App, event: HookEvent, input: &str) -> Result
     if input.session_id.trim().is_empty() || input.turn_id.trim().is_empty() {
         bail!("Codex hook input is missing a session or turn ID");
     }
-    let expected_event = match event {
+    validate_hook_event(Agent::Codex, event, &input.hook_event_name)?;
+    let context_path =
+        turn_context_path(app, Agent::Codex, &input.session_id, Some(&input.turn_id));
+    handle_turn_hook(
+        app,
+        Agent::Codex,
+        event,
+        &context_path,
+        input.prompt,
+        input.last_assistant_message,
+    )
+}
+
+pub fn handle_claude_hook(app: &mut App, event: HookEvent, input: &str) -> Result<Option<String>> {
+    let input: ClaudeHookInput = serde_json::from_str(input).context("parse Claude hook input")?;
+    if input.session_id.trim().is_empty() {
+        bail!("Claude hook input is missing a session ID");
+    }
+    validate_hook_event(Agent::Claude, event, &input.hook_event_name)?;
+    let context_path = turn_context_path(app, Agent::Claude, &input.session_id, None);
+    handle_turn_hook(
+        app,
+        Agent::Claude,
+        event,
+        &context_path,
+        input.prompt,
+        input.last_assistant_message,
+    )
+}
+
+fn validate_hook_event(agent: Agent, event: HookEvent, actual: &str) -> Result<()> {
+    let expected = match event {
         HookEvent::UserPrompt => "UserPromptSubmit",
         HookEvent::Stop => "Stop",
-        HookEvent::SessionStart => bail!("session-start does not accept Codex JSON input"),
+        HookEvent::SessionStart => bail!(
+            "session-start does not accept {} JSON input",
+            agent_display_name(agent)
+        ),
     };
-    if input.hook_event_name != expected_event {
-        bail!(
-            "expected {expected_event} hook input, received {}",
-            input.hook_event_name
-        );
+    if actual != expected {
+        bail!("expected {expected} hook input, received {actual}");
     }
+    Ok(())
+}
 
-    let context_path = turn_context_path(app, &input.session_id, &input.turn_id);
+fn handle_turn_hook(
+    app: &mut App,
+    agent: Agent,
+    event: HookEvent,
+    context_path: &Path,
+    prompt: Option<String>,
+    last_assistant_message: Option<String>,
+) -> Result<Option<String>> {
+    let context_description = format!("{} turn context", agent_display_name(agent));
     match event {
         HookEvent::UserPrompt => {
-            let prompt = input
-                .prompt
-                .context("UserPromptSubmit input is missing prompt")?;
+            let prompt = prompt.context("UserPromptSubmit input is missing prompt")?;
             let prompt = normalize_label(&prompt, 240, true).unwrap_or_default();
-            ensure_absent_or_regular(&context_path, "Codex turn context")?;
-            atomic_write(&context_path, &serde_json::to_vec(&TurnContext { prompt })?)?;
+            ensure_absent_or_regular(context_path, &context_description)?;
+            atomic_write(context_path, &serde_json::to_vec(&TurnContext { prompt })?)?;
             Ok(None)
         }
         HookEvent::Stop => {
-            let prompt = if regular_file_exists(&context_path, "Codex turn context")? {
-                serde_json::from_slice::<TurnContext>(&fs::read(&context_path)?)
+            let prompt = if regular_file_exists(context_path, &context_description)? {
+                serde_json::from_slice::<TurnContext>(&fs::read(context_path)?)
                     .ok()
                     .map(|context| context.prompt)
             } else {
                 None
             };
             let label =
-                automatic_turn_label(prompt.as_deref(), input.last_assistant_message.as_deref());
+                automatic_turn_label(agent, prompt.as_deref(), last_assistant_message.as_deref());
             app.create_quiet(Some(label), true)?;
-            if regular_file_exists(&context_path, "Codex turn context")? {
+            if regular_file_exists(context_path, &context_description)? {
                 fs::remove_file(context_path)?;
             }
             Ok(Some("{}".into()))
@@ -367,18 +387,40 @@ fn agent_name(agent: Agent) -> &'static str {
     }
 }
 
-fn turn_context_path(app: &App, session_id: &str, turn_id: &str) -> PathBuf {
+fn agent_display_name(agent: Agent) -> &'static str {
+    match agent {
+        Agent::Claude => "Claude",
+        Agent::Codex => "Codex",
+    }
+}
+
+fn managed_command(agent: Agent, event: HookEvent) -> String {
+    let (event, marker) = match event {
+        HookEvent::SessionStart => ("session-start", SESSION_MARKER),
+        HookEvent::UserPrompt => ("user-prompt", PROMPT_MARKER),
+        HookEvent::Stop => ("stop", TURN_MARKER),
+    };
+    format!(
+        "savestate --require-project hook {} {event} # {marker}",
+        agent_name(agent)
+    )
+}
+
+fn turn_context_path(app: &App, agent: Agent, session_id: &str, turn_id: Option<&str>) -> PathBuf {
     let mut hasher = blake3::Hasher::new();
     hasher.update(session_id.as_bytes());
-    hasher.update(&[0]);
-    hasher.update(turn_id.as_bytes());
+    if let Some(turn_id) = turn_id {
+        hasher.update(&[0]);
+        hasher.update(turn_id.as_bytes());
+    }
     app.store
         .path()
-        .join("hooks/codex")
+        .join("hooks")
+        .join(agent_name(agent))
         .join(format!("{}.json", hasher.finalize().to_hex()))
 }
 
-fn automatic_turn_label(prompt: Option<&str>, assistant: Option<&str>) -> String {
+fn automatic_turn_label(agent: Agent, prompt: Option<&str>, assistant: Option<&str>) -> String {
     let prompt = prompt
         .and_then(|value| normalize_label(value, 72, true).ok())
         .filter(|value| !is_acknowledgement(value));
@@ -391,7 +433,7 @@ fn automatic_turn_label(prompt: Option<&str>, assistant: Option<&str>) -> String
     } else {
         "Turn completed".into()
     };
-    format!("Codex · {candidate}")
+    format!("{} · {candidate}", agent_display_name(agent))
 }
 
 fn is_acknowledgement(value: &str) -> bool {

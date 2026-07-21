@@ -112,6 +112,13 @@ pub(super) fn validate_manifest(manifest: &SnapshotManifest) -> Result<()> {
             if root.repository && identity.kind != "directory" {
                 bail!("repository root must be a directory");
             }
+            if identity.birth_time_secs.is_some() != identity.birth_time_nanos.is_some()
+                || identity
+                    .birth_time_nanos
+                    .is_some_and(|nanos| nanos >= 1_000_000_000)
+            {
+                bail!("filesystem root {} has an invalid birth time", root.id);
+            }
             if manifest.schema_version >= 4
                 && (manifest.platform.starts_with("macos-")
                     || manifest.platform.starts_with("linux-"))

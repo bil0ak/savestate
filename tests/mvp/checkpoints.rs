@@ -84,7 +84,7 @@ fn integrations_merge_and_remove_only_savestate_hook() -> Result<()> {
     fs::create_dir(project.path().join(".claude"))?;
     fs::write(
         project.path().join(".claude/settings.json"),
-        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo keep savestate-session-start"}]}]}}"#,
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo keep savestate-session-start"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"echo keep prompt"}]}],"Stop":[{"hooks":[{"type":"command","command":"echo keep stop"}]}]}}"#,
     )?;
     integrations::configure(project.path(), Agent::Claude, false)?;
     integrations::configure(project.path(), Agent::Claude, false)?;
@@ -97,7 +97,13 @@ fn integrations_merge_and_remove_only_savestate_hook() -> Result<()> {
             .count(),
         1
     );
+    assert_eq!(installed.matches("savestate-user-prompt").count(), 1);
+    assert_eq!(installed.matches("savestate-turn-complete").count(), 1);
+    assert!(installed.contains("hook claude user-prompt"));
+    assert!(installed.contains("hook claude stop"));
     assert!(installed.contains("echo keep savestate-session-start"));
+    assert!(installed.contains("echo keep prompt"));
+    assert!(installed.contains("echo keep stop"));
     assert!(installed.contains("savestate --require-project"));
     assert!(!installed.contains(&project.path().display().to_string()));
     assert!(!installed.contains(&std::env::current_exe()?.display().to_string()));
@@ -106,7 +112,11 @@ fn integrations_merge_and_remove_only_savestate_hook() -> Result<()> {
     assert!(!removed.contains(
         "savestate --require-project hook claude session-start # savestate-session-start"
     ));
+    assert!(!removed.contains("savestate-user-prompt"));
+    assert!(!removed.contains("savestate-turn-complete"));
     assert!(removed.contains("echo keep savestate-session-start"));
+    assert!(removed.contains("echo keep prompt"));
+    assert!(removed.contains("echo keep stop"));
 
     fs::create_dir_all(project.path().join(".codex"))?;
     fs::write(
@@ -136,6 +146,21 @@ fn integrations_merge_and_remove_only_savestate_hook() -> Result<()> {
     assert!(!codex.contains("savestate-session-start"));
     assert!(!codex.contains("savestate-user-prompt"));
     assert!(!codex.contains("savestate-turn-complete"));
+    Ok(())
+}
+
+#[test]
+fn legacy_claude_session_only_installation_requires_an_upgrade() -> Result<()> {
+    let project = tempdir()?;
+    fs::create_dir(project.path().join(".claude"))?;
+    fs::write(
+        project.path().join(".claude/settings.json"),
+        r#"{"hooks":{"SessionStart":[{"matcher":"startup|resume","hooks":[{"type":"command","command":"savestate --require-project hook claude session-start # savestate-session-start"}]}]}}"#,
+    )?;
+
+    assert!(!integrations::is_configured(project.path(), Agent::Claude)?);
+    integrations::configure(project.path(), Agent::Claude, false)?;
+    assert!(integrations::is_configured(project.path(), Agent::Claude)?);
     Ok(())
 }
 
@@ -212,6 +237,192 @@ fn codex_hooks_label_changed_turns_from_the_user_request() -> Result<()> {
         store.load("latest")?.label.as_deref(),
         Some("Codex · Turn completed")
     );
+    Ok(())
+}
+
+#[test]
+fn claude_hooks_share_turn_labels_and_replace_stale_prompt_context() -> Result<()> {
+    let project = tempdir()?;
+    let mut app = App::open(project.path().to_path_buf())?;
+    let first_prompt = serde_json::json!({
+        "session_id": "session-1",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "This stale prompt should be replaced"
+    });
+    integrations::handle_claude_hook(
+        &mut app,
+        integrations::HookEvent::UserPrompt,
+        &first_prompt.to_string(),
+    )?;
+    let replacement_prompt = serde_json::json!({
+        "session_id": "session-1",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "Add dark mode to the settings page"
+    });
+    integrations::handle_claude_hook(
+        &mut app,
+        integrations::HookEvent::UserPrompt,
+        &replacement_prompt.to_string(),
+    )?;
+    let context_directory = project.path().join(".savestate/hooks/claude");
+    assert_eq!(fs::read_dir(&context_directory)?.count(), 1);
+
+    fs::write(project.path().join("settings.css"), b"dark")?;
+    let stop = serde_json::json!({
+        "session_id": "session-1",
+        "hook_event_name": "Stop",
+        "last_assistant_message": "Implemented the requested dark theme.",
+        "stop_hook_active": false
+    });
+    assert_eq!(
+        integrations::handle_claude_hook(
+            &mut app,
+            integrations::HookEvent::Stop,
+            &stop.to_string(),
+        )?,
+        Some("{}".into())
+    );
+    let store = Store::open(project.path().join(".savestate"))?;
+    assert_eq!(
+        store.load("latest")?.label.as_deref(),
+        Some("Claude · Add dark mode to the settings page")
+    );
+    assert_eq!(fs::read_dir(context_directory)?.count(), 0);
+
+    let prompt = serde_json::json!({
+        "session_id": "session-1",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "ok"
+    });
+    integrations::handle_claude_hook(
+        &mut app,
+        integrations::HookEvent::UserPrompt,
+        &prompt.to_string(),
+    )?;
+    fs::write(project.path().join("settings.css"), b"dark and polished")?;
+    let stop = serde_json::json!({
+        "session_id": "session-1",
+        "hook_event_name": "Stop",
+        "last_assistant_message": "Polished the dark theme transitions."
+    });
+    integrations::handle_claude_hook(&mut app, integrations::HookEvent::Stop, &stop.to_string())?;
+    assert_eq!(
+        store.load("latest")?.label.as_deref(),
+        Some("Claude · Polished the dark theme transitions.")
+    );
+
+    let prompt = serde_json::json!({
+        "session_id": "session-1",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "   "
+    });
+    integrations::handle_claude_hook(
+        &mut app,
+        integrations::HookEvent::UserPrompt,
+        &prompt.to_string(),
+    )?;
+    fs::write(
+        project.path().join("image-result.txt"),
+        b"created from image",
+    )?;
+    let stop = serde_json::json!({
+        "session_id": "session-1",
+        "hook_event_name": "Stop",
+        "last_assistant_message": null
+    });
+    integrations::handle_claude_hook(&mut app, integrations::HookEvent::Stop, &stop.to_string())?;
+    assert_eq!(
+        store.load("latest")?.label.as_deref(),
+        Some("Claude · Turn completed")
+    );
+    Ok(())
+}
+
+#[test]
+fn agent_hooks_validate_provider_ids_and_event_names() -> Result<()> {
+    let project = tempdir()?;
+    let mut app = App::open(project.path().to_path_buf())?;
+
+    let missing_claude_session = serde_json::json!({
+        "session_id": " ",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "change a file"
+    });
+    let error = integrations::handle_claude_hook(
+        &mut app,
+        integrations::HookEvent::UserPrompt,
+        &missing_claude_session.to_string(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("missing a session ID"));
+
+    let mismatched_claude_event = serde_json::json!({
+        "session_id": "session-1",
+        "hook_event_name": "Stop",
+        "prompt": "change a file"
+    });
+    let error = integrations::handle_claude_hook(
+        &mut app,
+        integrations::HookEvent::UserPrompt,
+        &mismatched_claude_event.to_string(),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("expected UserPromptSubmit hook input, received Stop")
+    );
+
+    let missing_codex_turn = serde_json::json!({
+        "session_id": "session-1",
+        "turn_id": " ",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "change a file"
+    });
+    let error = integrations::handle_codex_hook(
+        &mut app,
+        CodexHookEvent::UserPrompt,
+        &missing_codex_turn.to_string(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("missing a session or turn ID"));
+    Ok(())
+}
+
+#[test]
+fn claude_stop_keeps_prompt_context_when_checkpointing_fails() -> Result<()> {
+    let project = tempdir()?;
+    let mut app = App::open(project.path().to_path_buf())?;
+    let prompt = serde_json::json!({
+        "session_id": "session-1",
+        "hook_event_name": "UserPromptSubmit",
+        "prompt": "Keep this context until checkpointing succeeds"
+    });
+    integrations::handle_claude_hook(
+        &mut app,
+        integrations::HookEvent::UserPrompt,
+        &prompt.to_string(),
+    )?;
+    let context_directory = project.path().join(".savestate/hooks/claude");
+    assert_eq!(fs::read_dir(&context_directory)?.count(), 1);
+    fs::write(
+        project.path().join(".savestate/journal.json"),
+        r#"{"version":1,"target_id":"target","recovery_id":"recovery","phase":"prepared","commit_started":false,"swaps":[],"database_swaps":[],"preserved_paths":[],"preservation_root":""}"#,
+    )?;
+
+    let stop = serde_json::json!({
+        "session_id": "session-1",
+        "hook_event_name": "Stop",
+        "last_assistant_message": "done"
+    });
+    let error = integrations::handle_claude_hook(
+        &mut app,
+        integrations::HookEvent::Stop,
+        &stop.to_string(),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("interrupted restore"));
+    assert_eq!(fs::read_dir(context_directory)?.count(), 1);
     Ok(())
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "savestate"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.85"
 description = "Verified local checkpoints and rollback for coding-agent sessions"
@@ -12,7 +12,7 @@ documentation = "https://docs.rs/savestate"
 keywords = ["checkpoint", "rollback", "backup", "coding-agents", "cli"]
 categories = ["command-line-utilities", "development-tools", "filesystem"]
 publish = ["crates-io"]
-exclude = ["/.cargo/**", "/.github/**", "/.gitignore"]
+exclude = ["/.cargo/**", "/.github/**", "/.gitignore", "/scripts/**"]
 
 [dependencies]
 anyhow = "1.0"
@@ -42,6 +42,9 @@ percent-encoding = "2"
 
 [target.'cfg(unix)'.dependencies]
 xattr = "1.5"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1.1", features = ["fs"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"

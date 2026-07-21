@@ -60,8 +60,9 @@ impl Savestate {
                 integrations::Agent::Claude => {
                     ui::line(format_args!("  1. Open this project in Claude Code"));
                     ui::line(format_args!("  2. Start a new session"));
+                    ui::line(format_args!("  3. Complete a changed turn"));
                     ui::line(format_args!(
-                        "  3. Run {} after the first checkpoint",
+                        "  4. Run {} after the first completed turn",
                         ui::command("savestate doctor")
                     ));
                 }
@@ -484,7 +485,10 @@ impl Savestate {
                 }
                 continue;
             };
-            if !recorded.repository && expected.file_id.is_none() {
+            if !recorded.repository
+                && expected.file_id.is_none()
+                && expected.birth_time_secs.is_none()
+            {
                 bail!(
                     "checkpoint has no stable file identity for external root {}; restore is refused",
                     recorded.id
@@ -499,16 +503,23 @@ impl Savestate {
                 || expected.kind != current.kind
                 || expected.device.is_some() && expected.device != current.device
                 || expected.file_id.is_some() && expected.file_id != current.file_id
+                || expected.birth_time_secs.is_some()
+                    && (expected.birth_time_secs != current.birth_time_secs
+                        || expected.birth_time_nanos != current.birth_time_nanos)
             {
                 bail!(
-                    "filesystem root {} changed identity: expected {} on device {:?} with file ID {:?}, found {} on device {:?} with file ID {:?}",
+                    "filesystem root {} changed identity: expected {} on device {:?} with file ID {:?} and birth time {:?}.{:?}, found {} on device {:?} with file ID {:?} and birth time {:?}.{:?}",
                     recorded.id,
                     expected.canonical_path.display(),
                     expected.device,
                     expected.file_id,
+                    expected.birth_time_secs,
+                    expected.birth_time_nanos,
                     current.canonical_path.display(),
                     current.device,
-                    current.file_id
+                    current.file_id,
+                    current.birth_time_secs,
+                    current.birth_time_nanos
                 );
             }
         }
