@@ -41,12 +41,44 @@ pub(super) fn root_identity(path: &Path) -> Result<RootIdentity> {
     let device = None;
     #[cfg(not(unix))]
     let file_id = None;
+    #[cfg(target_os = "linux")]
+    let birth_time = platform::birth_time(path)?;
+    #[cfg(not(target_os = "linux"))]
+    let birth_time = metadata.created().ok().map(system_time_parts).transpose()?;
     Ok(RootIdentity {
         canonical_path: path.canonicalize()?,
         kind: kind.into(),
         device,
         file_id,
+        birth_time_secs: birth_time.map(|(seconds, _)| seconds),
+        birth_time_nanos: birth_time.map(|(_, nanos)| nanos),
     })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn system_time_parts(value: std::time::SystemTime) -> Result<(i64, u32)> {
+    match value.duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => Ok((
+            i64::try_from(duration.as_secs()).context("filesystem birth time is too large")?,
+            duration.subsec_nanos(),
+        )),
+        Err(error) => {
+            let duration = error.duration();
+            let seconds =
+                i64::try_from(duration.as_secs()).context("filesystem birth time is too small")?;
+            if duration.subsec_nanos() == 0 {
+                Ok((-seconds, 0))
+            } else {
+                Ok((
+                    seconds
+                        .checked_add(1)
+                        .and_then(i64::checked_neg)
+                        .context("filesystem birth time is too small")?,
+                    1_000_000_000 - duration.subsec_nanos(),
+                ))
+            }
+        }
+    }
 }
 
 pub(super) struct RootSelection {

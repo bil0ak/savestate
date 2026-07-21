@@ -52,6 +52,10 @@ pub struct RootIdentity {
     pub device: Option<u64>,
     #[serde(default)]
     pub file_id: Option<u64>,
+    #[serde(default)]
+    pub birth_time_secs: Option<i64>,
+    #[serde(default)]
+    pub birth_time_nanos: Option<u32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

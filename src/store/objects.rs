@@ -58,7 +58,7 @@ impl Store {
         if hash_file(&temporary)? != hash {
             return Ok(ObjectWrite::SourceChanged);
         }
-        File::open(&temporary)?.sync_all()?;
+        platform::sync_file(&temporary)?;
         if let Err(error) = fs::rename(&temporary, &destination) {
             if path_exists(&destination)? {
                 ensure_regular_file(&destination, "content object")?;
@@ -76,7 +76,7 @@ impl Store {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&destination, fs::Permissions::from_mode(0o600))?;
         }
-        File::open(&destination)?.sync_all()?;
+        platform::sync_file(&destination)?;
         sync_directory(parent)?;
         Ok(ObjectWrite::Stored((hash, engine.into())))
     }

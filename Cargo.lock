@@ -954,6 +954,7 @@ dependencies = [
  "percent-encoding",
  "predicates",
  "rusqlite",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

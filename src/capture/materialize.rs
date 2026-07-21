@@ -128,9 +128,7 @@ pub fn sync_manifest_data(entries: &[FileEntry], roots: &[RootManifest]) -> Resu
                 path.display()
             );
         }
-        fs::File::open(&path)
-            .with_context(|| format!("open restored file for durability: {}", path.display()))?
-            .sync_all()
+        platform::sync_file(&path)
             .with_context(|| format!("sync restored file: {}", path.display()))?;
     }
     #[cfg(unix)]

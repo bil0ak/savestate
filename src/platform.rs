@@ -2,6 +2,29 @@
 
 use std::{fs, io, path::Path};
 
+#[cfg(target_os = "linux")]
+pub fn birth_time(path: &Path) -> io::Result<Option<(i64, u32)>> {
+    use rustix::{
+        fs::{AtFlags, CWD, StatxFlags, statx},
+        io::Errno,
+    };
+
+    match statx(CWD, path, AtFlags::SYMLINK_NOFOLLOW, StatxFlags::BTIME) {
+        Ok(metadata) => Ok(((metadata.stx_mask & StatxFlags::BTIME.bits()) != 0)
+            .then_some((metadata.stx_btime.tv_sec, metadata.stx_btime.tv_nsec))),
+        Err(Errno::NOSYS) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub fn sync_file(path: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    let file = fs::OpenOptions::new().read(true).write(true).open(path)?;
+    #[cfg(not(windows))]
+    let file = fs::File::open(path)?;
+    file.sync_all()
+}
+
 pub fn clone_or_copy(source: &Path, destination: &Path) -> io::Result<&'static str> {
     #[cfg(target_os = "macos")]
     {
@@ -28,12 +51,21 @@ pub fn clone_or_copy(source: &Path, destination: &Path) -> io::Result<&'static s
         drop(dst);
         let _ = fs::remove_file(destination);
     }
-    fs::copy(source, destination)?;
-    Ok(if cfg!(windows) {
-        "windows_cas_copy"
-    } else {
-        "cas_copy"
-    })
+    #[cfg(windows)]
+    {
+        let mut source = fs::File::open(source)?;
+        let mut destination = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(destination)?;
+        io::copy(&mut source, &mut destination)?;
+        Ok("windows_cas_copy")
+    }
+    #[cfg(not(windows))]
+    {
+        fs::copy(source, destination)?;
+        Ok("cas_copy")
+    }
 }
 
 #[cfg(unix)]
