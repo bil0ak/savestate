@@ -68,17 +68,20 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
+      - name: Add uninstall scripts
+        run: cp scripts/uninstall.sh scripts/uninstall.ps1 dist/
       - uses: sigstore/cosign-installer@v3
       - name: Create checksums and keyless signatures
         shell: bash
         run: |
           cd dist
-          sha256sum savestate-* > SHA256SUMS
-          for artifact in savestate-* SHA256SUMS; do
+          sha256sum savestate-* uninstall.sh uninstall.ps1 > SHA256SUMS
+          for artifact in savestate-* uninstall.sh uninstall.ps1 SHA256SUMS; do
             cosign sign-blob --yes --bundle "${artifact}.sigstore.json" "$artifact"
           done
       - uses: softprops/action-gh-release@v2

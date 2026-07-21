@@ -17,6 +17,54 @@ jobs:
         with:
           toolchain: stable
           components: clippy,rustfmt
+      - name: Test Unix uninstaller
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          install_dir="$RUNNER_TEMP/savestate-uninstall"
+          mkdir -p "$install_dir"
+          touch "$install_dir/savestate" "$install_dir/keep"
+          SAVESTATE_INSTALL_DIR="$install_dir" sh scripts/uninstall.sh
+          test ! -e "$install_dir/savestate"
+          test -e "$install_dir/keep"
+          mkdir "$install_dir/savestate"
+          if SAVESTATE_INSTALL_DIR="$install_dir" sh scripts/uninstall.sh; then
+            exit 1
+          fi
+          test -d "$install_dir/savestate"
+      - name: Test Windows uninstaller
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installDirectory = Join-Path $env:RUNNER_TEMP "savestate-uninstall"
+          New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $installDirectory "savestate.exe") -Value "fixture"
+          Set-Content -LiteralPath (Join-Path $installDirectory ".savestate-path-added") -Value "fixture"
+          $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+          $updatedUserPath = if ($userPath) { "$userPath;$installDirectory" } else { $installDirectory }
+          [Environment]::SetEnvironmentVariable("Path", $updatedUserPath, "User")
+          $env:SAVESTATE_INSTALL_DIR = $installDirectory
+          & ./scripts/uninstall.ps1
+          if (Test-Path -LiteralPath (Join-Path $installDirectory "savestate.exe")) {
+            throw "Windows uninstaller left the binary behind."
+          }
+          $remainingPath = [Environment]::GetEnvironmentVariable("Path", "User") -split ";"
+          if ($remainingPath -contains $installDirectory) {
+            throw "Windows uninstaller left its owned PATH entry behind."
+          }
+
+          $preservationDirectory = Join-Path $env:RUNNER_TEMP "savestate-uninstall-preservation"
+          New-Item -ItemType Directory -Path $preservationDirectory -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $preservationDirectory "savestate.exe") -Value "fixture"
+          Set-Content -LiteralPath (Join-Path $preservationDirectory "keep") -Value "fixture"
+          $env:SAVESTATE_INSTALL_DIR = $preservationDirectory
+          & ./scripts/uninstall.ps1
+          if (-not (Test-Path -LiteralPath (Join-Path $preservationDirectory "keep"))) {
+            throw "Windows uninstaller removed an unrelated file."
+          }
+      - name: Check distribution stats tool
+        if: runner.os == 'Linux'
+        run: PYTHONPYCACHEPREFIX="$RUNNER_TEMP/pycache" python3 -m py_compile scripts/distribution-stats.py
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features --locked
