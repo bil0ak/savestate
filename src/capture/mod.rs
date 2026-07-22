@@ -69,12 +69,21 @@ pub struct Capture {
     pub(crate) notices: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GitIgnoreStatus {
+    Enabled,
+    Disabled,
+    NotRepository { gitignore_found: bool },
+    Unavailable,
+}
+
 pub struct Discovery {
     pub roots: Vec<RootManifest>,
     paths: BTreeMap<String, Vec<(PathBuf, PathBuf)>>,
     pub sqlite: Vec<SqliteCandidate>,
     pub scope: CaptureScope,
     pub git_fallback_notices: Vec<String>,
+    pub(crate) git_ignore_status: GitIgnoreStatus,
     pub logical_paths: usize,
     pub logical_bytes: u64,
 }

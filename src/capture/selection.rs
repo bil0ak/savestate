@@ -87,6 +87,7 @@ pub(super) struct RootSelection {
     pub(super) sources: Vec<GitIgnoreSource>,
     pub(super) explicitly_included: Vec<PathBuf>,
     pub(super) git_fallback_notice: Option<String>,
+    pub(super) git_ignore_status: GitIgnoreStatus,
 }
 
 pub(super) struct SelectionPolicy<'a> {
@@ -125,6 +126,7 @@ pub(super) fn paths_for_root(
             sources: Vec::new(),
             explicitly_included: Vec::new(),
             git_fallback_notice: None,
+            git_ignore_status: GitIgnoreStatus::Disabled,
         });
     }
     let base = spec.path.clone();
@@ -135,6 +137,17 @@ pub(super) fn paths_for_root(
     };
     let mut exact_git_scope = false;
     let mut git_fallback_notice = None;
+    let mut git_ignore_status = if !spec.repository || !respect_gitignore {
+        GitIgnoreStatus::Disabled
+    } else {
+        match &git_status {
+            GitRepositoryStatus::Available => GitIgnoreStatus::Enabled,
+            GitRepositoryStatus::NotRepository => GitIgnoreStatus::NotRepository {
+                gitignore_found: false,
+            },
+            GitRepositoryStatus::Unavailable(_) => GitIgnoreStatus::Unavailable,
+        }
+    };
     let mut ignored = Vec::new();
     let mut sources = Vec::new();
     let mut tracked_paths = BTreeSet::new();
@@ -148,6 +161,7 @@ pub(super) fn paths_for_root(
                 selection.selected
             }
             Err(error) => {
+                git_ignore_status = GitIgnoreStatus::Unavailable;
                 git_fallback_notice = Some(format!(
                     "Git-aware capture is unavailable ({error}); capturing the full filesystem scope"
                 ));
@@ -164,6 +178,11 @@ pub(super) fn paths_for_root(
                     && base.join(relative).is_file()
             });
             git_fallback_notice = git_status.fallback_notice(has_gitignore);
+            if matches!(git_status, GitRepositoryStatus::NotRepository) {
+                git_ignore_status = GitIgnoreStatus::NotRepository {
+                    gitignore_found: has_gitignore,
+                };
+            }
         }
         selected
     };
@@ -269,6 +288,7 @@ pub(super) fn paths_for_root(
         sources,
         explicitly_included: explicitly_included.into_iter().collect(),
         git_fallback_notice,
+        git_ignore_status,
     })
 }
 

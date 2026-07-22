@@ -27,6 +27,7 @@ pub fn discover(
     let mut explicitly_included_paths = Vec::new();
     let mut ignore_sources = Vec::new();
     let mut git_fallback_notices = Vec::new();
+    let mut git_ignore_status = GitIgnoreStatus::Disabled;
     let mut logical_paths = 0usize;
     let mut logical_bytes = 0u64;
     let mut found_sqlite = BTreeSet::new();
@@ -41,6 +42,9 @@ pub fn discover(
     };
     for spec in &roots {
         let selection = paths_for_root(spec, &policy)?;
+        if spec.repository {
+            git_ignore_status = selection.git_ignore_status;
+        }
         let mut paths = selection.paths;
         ignored_boundaries.extend(selection.ignored.into_iter().map(|path| ScopedPath {
             root_id: spec.id.clone(),
@@ -135,6 +139,7 @@ pub fn discover(
             ignored_boundaries,
         },
         git_fallback_notices,
+        git_ignore_status,
         logical_paths,
         logical_bytes,
     })

@@ -110,18 +110,18 @@ impl Savestate {
             "Snapshot policy",
             format_args!(
                 "Git ignore {} ({} explicit includes, {} explicit excludes)",
-                if discovery
-                    .git_fallback_notices
-                    .iter()
-                    .any(|notice| { notice.contains("because this is not a Git repository") })
-                {
-                    "inactive (.gitignore ignored: not a Git repository)"
-                } else if !discovery.git_fallback_notices.is_empty() {
-                    "inactive (Git unavailable; full filesystem scope)"
-                } else if discovery.scope.respect_gitignore {
-                    "enabled"
-                } else {
-                    "disabled"
+                match discovery.git_ignore_status {
+                    filesystem::GitIgnoreStatus::Enabled => "enabled",
+                    filesystem::GitIgnoreStatus::Disabled => "disabled",
+                    filesystem::GitIgnoreStatus::NotRepository {
+                        gitignore_found: true,
+                    } => "inactive (.gitignore ignored: not a Git repository)",
+                    filesystem::GitIgnoreStatus::NotRepository {
+                        gitignore_found: false,
+                    } => "inactive (not a Git repository)",
+                    filesystem::GitIgnoreStatus::Unavailable => {
+                        "inactive (Git unavailable; full filesystem scope)"
+                    }
                 },
                 discovery.scope.include.len(),
                 discovery.scope.exclude.len()

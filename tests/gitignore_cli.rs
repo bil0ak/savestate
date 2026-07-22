@@ -280,7 +280,7 @@ fn create_warns_but_continues_and_status_reports_scope() -> Result<()> {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "Snapshot policy: Git ignore enabled",
+            "Snapshot policy: Git ignore inactive (not a Git repository)",
         ))
         .stdout(predicate::str::contains("Selected scope:"));
     Ok(())
