@@ -1,5 +1,16 @@
 use super::*;
 
+const REQUIRED_DIRECTORIES: [&str; 8] = [
+    "snapshots",
+    "objects",
+    "transactions",
+    "labels",
+    "pins",
+    "hooks",
+    "hooks/codex",
+    "hooks/claude",
+];
+
 impl Store {
     /// Returns the validated store root for diagnostics and controlled tooling.
     pub fn path(&self) -> &Path {
@@ -31,23 +42,14 @@ impl Store {
             );
         }
         ensure_real_directory(&root)?;
-        let directories = [
-            "snapshots",
-            "objects",
-            "transactions",
-            "labels",
-            "pins",
-            "hooks",
-            "hooks/codex",
-        ];
-        for directory in directories {
+        for directory in REQUIRED_DIRECTORIES {
             ensure_real_directory(&root.join(directory))?;
         }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
-            for directory in directories {
+            for directory in REQUIRED_DIRECTORIES {
                 fs::set_permissions(root.join(directory), fs::Permissions::from_mode(0o700))?;
             }
         }

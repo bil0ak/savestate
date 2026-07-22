@@ -59,19 +59,22 @@ fn verification_rejects_scope_patterns_that_escape_the_project() -> Result<()> {
 #[cfg(unix)]
 #[test]
 fn store_refuses_symlinked_internal_directories() -> Result<()> {
-    let project = tempdir()?;
-    let victim = tempdir()?;
-    fs::write(project.path().join(".savestate.toml"), "")?;
-    drop(App::open(project.path().to_path_buf())?);
-    fs::remove_dir(project.path().join(".savestate/objects"))?;
-    std::os::unix::fs::symlink(victim.path(), project.path().join(".savestate/objects"))?;
+    for directory in ["objects", "hooks/codex", "hooks/claude"] {
+        let project = tempdir()?;
+        let victim = tempdir()?;
+        fs::write(project.path().join(".savestate.toml"), "")?;
+        drop(App::open(project.path().to_path_buf())?);
+        let store_directory = project.path().join(".savestate").join(directory);
+        fs::remove_dir(&store_directory)?;
+        std::os::unix::fs::symlink(victim.path(), &store_directory)?;
 
-    let error = match App::open(project.path().to_path_buf()) {
-        Ok(_) => panic!("symlinked store directory should be refused"),
-        Err(error) => error.to_string(),
-    };
-    assert!(error.contains("not a real directory"), "{error}");
-    assert_eq!(fs::read_dir(victim.path())?.count(), 0);
+        let error = match App::open(project.path().to_path_buf()) {
+            Ok(_) => panic!("symlinked store directory should be refused"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("not a real directory"), "{error}");
+        assert_eq!(fs::read_dir(victim.path())?.count(), 0);
+    }
     Ok(())
 }
 
