@@ -22,6 +22,7 @@ impl Savestate {
             kind: CheckpointKind::Manual,
             retention: RetentionMode::Apply,
         })
+        .map(|publication| publication.id)
     }
 
     pub fn create_filesystem_only(
@@ -41,6 +42,7 @@ impl Savestate {
             kind: CheckpointKind::Manual,
             retention: RetentionMode::Apply,
         })
+        .map(|publication| publication.id)
     }
 
     pub(crate) fn create_quiet(
@@ -59,15 +61,22 @@ impl Savestate {
             kind: CheckpointKind::Agent,
             retention: RetentionMode::Apply,
         })
+        .map(|publication| publication.id)
     }
 
-    pub(super) fn create_internal(&mut self, request: CreateRequest<'_>) -> Result<String> {
+    pub(super) fn create_internal(
+        &mut self,
+        request: CreateRequest<'_>,
+    ) -> Result<CheckpointPublication> {
         let _lock = self.store.lock()?;
         self.create_internal_locked(request)
     }
 
     #[allow(clippy::too_many_lines)] // Publication is kept as one auditable lock-bound sequence.
-    pub(super) fn create_internal_locked(&mut self, request: CreateRequest<'_>) -> Result<String> {
+    pub(super) fn create_internal_locked(
+        &mut self,
+        request: CreateRequest<'_>,
+    ) -> Result<CheckpointPublication> {
         let CreateRequest {
             label,
             if_changed,
@@ -138,7 +147,10 @@ impl Savestate {
                         ui::checkpoint(previous.id.as_str())
                     ));
                 }
-                return Ok(previous.id);
+                return Ok(CheckpointPublication {
+                    id: previous.id,
+                    created: false,
+                });
             }
         }
         self.store.verify(&manifest)?;
@@ -178,7 +190,7 @@ impl Savestate {
                 ));
             }
         }
-        Ok(id)
+        Ok(CheckpointPublication { id, created: true })
     }
 
     pub(super) fn sqlite_paths(&self, capture: DatabaseCapture<'_>) -> Result<BTreeSet<PathBuf>> {

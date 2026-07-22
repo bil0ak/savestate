@@ -167,12 +167,11 @@ impl Savestate {
         options: CreateOptions,
     ) -> Result<CreateOutcome, SavestateError> {
         self.ensure_no_journal().map_err(classify_error)?;
-        let existing = self.store.ids().map_err(classify_error)?;
         let database_capture = match options.databases {
             DatabaseSelection::Configured => DatabaseCapture::Configured,
             DatabaseSelection::FilesystemOnly => DatabaseCapture::None,
         };
-        let id = self
+        let publication = self
             .create_internal(CreateRequest {
                 label: normalize_explicit_label(options.label).map_err(classify_error)?,
                 if_changed: options.if_changed,
@@ -184,15 +183,14 @@ impl Savestate {
                 retention: RetentionMode::Apply,
             })
             .map_err(classify_error)?;
-        let checkpoint_id = CheckpointId::new(id).map_err(|error| {
+        let checkpoint_id = CheckpointId::new(publication.id).map_err(|error| {
             SavestateError::Operation(
                 anyhow::Error::new(error).context("invalid stored checkpoint ID"),
             )
         })?;
-        let created = !existing.iter().any(|value| value == checkpoint_id.as_str());
         Ok(CreateOutcome {
             checkpoint_id,
-            created,
+            created: publication.created,
         })
     }
 

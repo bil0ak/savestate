@@ -78,6 +78,11 @@ struct CreateRequest<'a> {
     retention: RetentionMode,
 }
 
+struct CheckpointPublication {
+    id: String,
+    created: bool,
+}
+
 struct PreparedRestore {
     target: SnapshotManifest,
     current_owned: Vec<FileEntry>,

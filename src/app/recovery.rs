@@ -38,16 +38,18 @@ impl Savestate {
             let target = self.store.load(&journal.target_id)?;
             self.store.verify(&target)?;
             self.validate_target(&target)?;
-            let recovery_id = self.create_internal_locked(CreateRequest {
-                label: Some(format!("pre-resume:{}", target.id)),
-                if_changed: false,
-                presentation: Presentation::Announce,
-                include_ignored: false,
-                recorded_scope: Some(&target.capture_scope),
-                database_capture: DatabaseCapture::Matching(&target),
-                kind: CheckpointKind::Recovery,
-                retention: RetentionMode::Defer,
-            })?;
+            let recovery_id = self
+                .create_internal_locked(CreateRequest {
+                    label: Some(format!("pre-resume:{}", target.id)),
+                    if_changed: false,
+                    presentation: Presentation::Announce,
+                    include_ignored: false,
+                    recorded_scope: Some(&target.capture_scope),
+                    database_capture: DatabaseCapture::Matching(&target),
+                    kind: CheckpointKind::Recovery,
+                    retention: RetentionMode::Defer,
+                })?
+                .id;
             let current = self.capture_ephemeral(
                 Some(&target.capture_scope),
                 DatabaseCapture::Matching(&target),

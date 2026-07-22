@@ -205,16 +205,18 @@ impl Savestate {
             bail!("state changed before the restore lock was acquired; preview again");
         }
         self.ensure_transaction_namespace_available(&refreshed.target.id)?;
-        let recovery = self.create_internal_locked(CreateRequest {
-            label: Some(format!("pre-restore:{}", plan.target.id)),
-            if_changed: false,
-            presentation: Presentation::Announce,
-            include_ignored: false,
-            recorded_scope: Some(&plan.target.capture_scope),
-            database_capture: DatabaseCapture::Matching(&plan.target),
-            kind: CheckpointKind::Recovery,
-            retention: RetentionMode::Defer,
-        })?;
+        let recovery = self
+            .create_internal_locked(CreateRequest {
+                label: Some(format!("pre-restore:{}", plan.target.id)),
+                if_changed: false,
+                presentation: Presentation::Announce,
+                include_ignored: false,
+                recorded_scope: Some(&plan.target.capture_scope),
+                database_capture: DatabaseCapture::Matching(&plan.target),
+                kind: CheckpointKind::Recovery,
+                retention: RetentionMode::Defer,
+            })?
+            .id;
         self.execute_restore(
             refreshed.target,
             recovery,
