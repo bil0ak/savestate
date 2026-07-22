@@ -32,6 +32,9 @@ jobs:
             exit 1
           fi
           test -d "$install_dir/savestate"
+          if SAVESTATE_INSTALL_DIR="relative/bin" sh scripts/uninstall.sh; then
+            exit 1
+          fi
       - name: Test Windows uninstaller
         if: runner.os == 'Windows'
         shell: pwsh
@@ -61,6 +64,20 @@ jobs:
           & ./scripts/uninstall.ps1
           if (-not (Test-Path -LiteralPath (Join-Path $preservationDirectory "keep"))) {
             throw "Windows uninstaller removed an unrelated file."
+          }
+
+          $env:SAVESTATE_INSTALL_DIR = "relative\bin"
+          $relativePathRejected = $false
+          try {
+            & ./scripts/uninstall.ps1
+          } catch {
+            if ($_.Exception.Message -notmatch "must be an absolute path") {
+              throw
+            }
+            $relativePathRejected = $true
+          }
+          if (-not $relativePathRejected) {
+            throw "Windows uninstaller accepted a relative installation path."
           }
       - name: Check distribution stats tool
         if: runner.os == 'Linux'

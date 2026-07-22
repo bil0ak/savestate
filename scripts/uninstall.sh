@@ -16,7 +16,7 @@ fi
 
 case "$install_dir" in
   /*) ;;
-  *) install_dir="$PWD/$install_dir" ;;
+  *) fail "SAVESTATE_INSTALL_DIR must be an absolute path" ;;
 esac
 
 binary="$install_dir/savestate"

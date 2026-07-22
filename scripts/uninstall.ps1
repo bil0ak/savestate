@@ -8,6 +8,12 @@ $InstallDirectory = if ($env:SAVESTATE_INSTALL_DIR) {
     $DefaultInstallDirectory
 }
 
+$DriveRelative = $InstallDirectory -match '^[A-Za-z]:($|[^\\/])'
+$RootRelative = $InstallDirectory -match '^[\\/](?![\\/])'
+if (-not [System.IO.Path]::IsPathRooted($InstallDirectory) -or $DriveRelative -or $RootRelative) {
+    throw "SAVESTATE_INSTALL_DIR must be an absolute path."
+}
+
 $InstallDirectory = [System.IO.Path]::GetFullPath($InstallDirectory)
 $DefaultInstallDirectory = [System.IO.Path]::GetFullPath($DefaultInstallDirectory)
 $BinaryPath = Join-Path $InstallDirectory "savestate.exe"
