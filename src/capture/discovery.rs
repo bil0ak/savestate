@@ -26,7 +26,7 @@ pub fn discover(
     let mut ignored_boundaries = Vec::new();
     let mut explicitly_included_paths = Vec::new();
     let mut ignore_sources = Vec::new();
-    let mut gitignore_rules_inactive = false;
+    let mut git_fallback_notices = Vec::new();
     let mut logical_paths = 0usize;
     let mut logical_bytes = 0u64;
     let mut found_sqlite = BTreeSet::new();
@@ -53,7 +53,7 @@ pub fn discover(
             }
         }));
         ignore_sources.extend(selection.sources);
-        gitignore_rules_inactive |= selection.gitignore_rules_inactive;
+        git_fallback_notices.extend(selection.git_fallback_notice);
         let mut omitted_database_paths = BTreeSet::new();
         for (relative, live) in &paths {
             let metadata = fs::symlink_metadata(live)?;
@@ -119,6 +119,8 @@ pub fn discover(
     ignored_boundaries.dedup();
     explicitly_included_paths.sort();
     explicitly_included_paths.dedup();
+    git_fallback_notices.sort();
+    git_fallback_notices.dedup();
     Ok(Discovery {
         roots,
         paths: captured_paths,
@@ -132,7 +134,7 @@ pub fn discover(
             git_ignore_sources: ignore_sources,
             ignored_boundaries,
         },
-        gitignore_rules_inactive,
+        git_fallback_notices,
         logical_paths,
         logical_bytes,
     })

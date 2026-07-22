@@ -331,6 +331,128 @@ fn non_git_project_reports_that_dot_gitignore_rules_are_inactive() -> Result<()>
 }
 
 #[test]
+fn init_falls_back_from_a_malformed_git_repository() -> Result<()> {
+    let project = tempdir()?;
+    fs::create_dir(project.path().join(".git"))?;
+    fs::write(project.path().join(".gitignore"), ".env\n")?;
+    fs::write(project.path().join(".env"), "TOKEN=secret\n")?;
+
+    Command::cargo_bin("savestate")?
+        .current_dir(project.path())
+        .arg("init")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Git integration is unavailable"));
+
+    let source = fs::read_to_string(project.path().join(".savestate.toml"))?;
+    let value: toml::Value = toml::from_str(&source)?;
+    assert!(value["include"].as_array().unwrap().is_empty());
+
+    Command::cargo_bin("savestate")?
+        .current_dir(project.path())
+        .args(["create", "--filesystem-only"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Git-aware capture is unavailable"));
+
+    let id = fs::read_to_string(project.path().join(".savestate/HEAD"))?;
+    let manifest = fs::read_to_string(
+        project
+            .path()
+            .join(".savestate/snapshots")
+            .join(id.trim())
+            .join("manifest.json"),
+    )?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest)?;
+    assert!(
+        manifest["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == ".env")
+    );
+    Ok(())
+}
+
+#[test]
+fn capture_falls_back_when_git_discovery_fails_after_repository_detection() -> Result<()> {
+    let project = tempdir()?;
+    std::process::Command::new("git")
+        .current_dir(project.path())
+        .args(["init", "-q"])
+        .status()?;
+    fs::create_dir(project.path().join(".git/index"))?;
+    fs::write(project.path().join(".savestate.toml"), "")?;
+    fs::write(project.path().join(".gitignore"), "ignored.txt\n")?;
+    fs::write(project.path().join("ignored.txt"), "captured")?;
+
+    Command::cargo_bin("savestate")?
+        .current_dir(project.path())
+        .args(["create", "--filesystem-only"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "capturing the full filesystem scope",
+        ));
+
+    let id = fs::read_to_string(project.path().join(".savestate/HEAD"))?;
+    let manifest = fs::read_to_string(
+        project
+            .path()
+            .join(".savestate/snapshots")
+            .join(id.trim())
+            .join("manifest.json"),
+    )?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest)?;
+    assert!(
+        manifest["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == "ignored.txt")
+    );
+    Ok(())
+}
+
+#[test]
+fn initialized_repository_works_when_git_is_not_on_path() -> Result<()> {
+    let project = tempdir()?;
+    std::process::Command::new("git")
+        .current_dir(project.path())
+        .args(["init", "-q"])
+        .status()?;
+    fs::write(project.path().join(".savestate.toml"), "")?;
+    fs::write(project.path().join(".gitignore"), "ignored.txt\n")?;
+    fs::write(project.path().join("ignored.txt"), "captured")?;
+
+    Command::cargo_bin("savestate")?
+        .current_dir(project.path())
+        .env("PATH", "")
+        .args(["create", "--filesystem-only"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Git integration is unavailable"));
+
+    let id = fs::read_to_string(project.path().join(".savestate/HEAD"))?;
+    let manifest = fs::read_to_string(
+        project
+            .path()
+            .join(".savestate/snapshots")
+            .join(id.trim())
+            .join("manifest.json"),
+    )?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest)?;
+    assert!(
+        manifest["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == "ignored.txt")
+    );
+    Ok(())
+}
+
+#[test]
 fn hook_warning_stays_on_stderr_and_stdout_remains_json() -> Result<()> {
     let project = tempdir()?;
     fs::write(

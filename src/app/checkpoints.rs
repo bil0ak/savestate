@@ -80,11 +80,11 @@ impl Savestate {
         } = request;
         self.ensure_no_journal()?;
         self.store.heal_catalog()?;
-        ensure_git_exclude(&self.root, self.store.path())?;
+        let git_exclude_notice = ensure_git_exclude(&self.root, self.store.path())?;
         let id = self.store.new_checkpoint_id()?;
         let started = Utc::now();
         let sqlite_paths = self.sqlite_paths(database_capture)?;
-        let capture = filesystem::capture(
+        let mut capture = filesystem::capture(
             &self.root,
             &self.config,
             &self.store,
@@ -92,6 +92,9 @@ impl Savestate {
             recorded_scope,
             &sqlite_paths,
         )?;
+        if let Some(notice) = git_exclude_notice {
+            capture.notices.insert(0, notice);
+        }
         if !matches!(presentation, Presentation::Silent) {
             for notice in &capture.notices {
                 ui::warning(format_args!("{notice}"));

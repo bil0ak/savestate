@@ -11,7 +11,7 @@ use crate::model::{
     RootManifest, SCHEMA_VERSION, ScopedPath, ServiceArtifact, SnapshotManifest, SwapRecord,
 };
 use crate::store::Store;
-use crate::{config, filesystem, integrations, interactive, restore, store, ui};
+use crate::{capture, config, filesystem, integrations, interactive, restore, store, ui};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use serde::Serialize;

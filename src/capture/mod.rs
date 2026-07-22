@@ -41,7 +41,10 @@ pub use materialize::{
 pub use selection::roots;
 pub use snapshot::capture;
 
-pub(crate) use ignore::{StoredIgnore, ignored_boundaries_in_detached, recorded_scope_ignores};
+pub(crate) use ignore::{
+    GitRepositoryStatus, StoredIgnore, git_repository_status, ignored_boundaries_in_detached,
+    recorded_scope_ignores,
+};
 
 use ignore::*;
 use materialize::sibling_with_suffix;
@@ -71,7 +74,7 @@ pub struct Discovery {
     paths: BTreeMap<String, Vec<(PathBuf, PathBuf)>>,
     pub sqlite: Vec<SqliteCandidate>,
     pub scope: CaptureScope,
-    pub gitignore_rules_inactive: bool,
+    pub git_fallback_notices: Vec<String>,
     pub logical_paths: usize,
     pub logical_bytes: u64,
 }

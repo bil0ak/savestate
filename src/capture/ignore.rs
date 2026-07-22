@@ -148,29 +148,72 @@ pub(crate) fn recorded_scope_ignores(
         .is_ignored(&live_root.join(relative), is_directory))
 }
 
-pub(super) fn is_git_worktree(root: &Path) -> Result<bool> {
-    let git_marker = match fs::symlink_metadata(root.join(".git")) {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GitRepositoryStatus {
+    Available,
+    NotRepository,
+    Unavailable(String),
+}
+
+impl GitRepositoryStatus {
+    pub(crate) fn is_available(&self) -> bool {
+        matches!(self, Self::Available)
+    }
+
+    pub(crate) fn fallback_notice(&self, has_gitignore: bool) -> Option<String> {
+        match self {
+            Self::NotRepository if has_gitignore => Some(
+                ".gitignore found, but its rules are ignored because this is not a Git repository; capturing the full non-Git scope"
+                    .to_owned(),
+            ),
+            Self::Unavailable(reason) => Some(format!(
+                "Git-aware capture is unavailable ({reason}); capturing the full filesystem scope"
+            )),
+            Self::Available | Self::NotRepository => None,
+        }
+    }
+
+    pub(crate) fn unavailable_reason(&self) -> Option<&str> {
+        match self {
+            Self::Unavailable(reason) => Some(reason),
+            Self::Available | Self::NotRepository => None,
+        }
+    }
+}
+
+pub(crate) fn git_repository_status(root: &Path) -> GitRepositoryStatus {
+    let marker_exists = match fs::symlink_metadata(root.join(".git")) {
         Ok(_) => true,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-        Err(error) => return Err(error).context("inspect Git repository marker"),
+        Err(error) => {
+            return GitRepositoryStatus::Unavailable(format!(
+                "the repository marker could not be inspected: {error}"
+            ));
+        }
     };
-    let output = Command::new("git")
+    match Command::new("git")
         .current_dir(root)
         .args(["rev-parse", "--is-inside-work-tree"])
-        .output();
-    match output {
-        Ok(output) if output.status.success() => Ok(output.stdout.starts_with(b"true")),
-        Ok(_) if git_marker => {
-            bail!(
-                "Git-aware capture is enabled, but Git could not inspect {}",
-                root.display()
-            )
+        .output()
+    {
+        Ok(output) if output.status.success() && output.stdout.starts_with(b"true") => {
+            GitRepositoryStatus::Available
         }
-        Err(error) if git_marker => Err(error).context(
-            "Git-aware capture is enabled for a Git repository, but Git cannot be executed",
-        ),
-        Ok(_) | Err(_) => Ok(false),
+        Ok(output) if marker_exists => GitRepositoryStatus::Unavailable(git_error_reason(
+            &output.stderr,
+            "Git could not inspect the repository",
+        )),
+        Err(error) if marker_exists => {
+            GitRepositoryStatus::Unavailable(format!("Git could not be executed: {error}"))
+        }
+        Ok(_) | Err(_) => GitRepositoryStatus::NotRepository,
     }
+}
+
+pub(super) fn git_error_reason(stderr: &[u8], fallback: &str) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    let message = stderr.lines().find(|line| !line.trim().is_empty());
+    message.map_or_else(|| fallback.to_owned(), |line| line.trim().to_owned())
 }
 
 pub(super) fn git_paths(root: &Path, args: &[&str]) -> Result<Vec<PathBuf>> {

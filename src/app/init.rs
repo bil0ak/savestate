@@ -21,8 +21,7 @@ impl Savestate {
     pub fn init_with_guidance(&mut self, show_next_steps: bool) -> Result<()> {
         let path = self.root.join(".savestate.toml");
         let already_initialized = path.is_file();
-        let git_repository = self.root.join(".git").exists();
-        let includes = detect_ignored_includes(&self.root)?;
+        let (git_repository, includes, mut warnings) = init_git_discovery(&self.root);
         let postgres_detected = std::env::var_os("DATABASE_URL").is_some()
             || env_file_has_key(&self.root.join(".env"), "DATABASE_URL")?;
         if !path.exists() {
@@ -64,7 +63,12 @@ impl Savestate {
                 store::atomic_write(&path, toml::to_string_pretty(&value)?.as_bytes())?;
             }
         }
-        ensure_git_exclude(&self.root, self.store.path())?;
+        let git_exclude_warning = git_repository
+            .then(|| ensure_git_exclude(&self.root, self.store.path()))
+            .transpose()?
+            .flatten();
+        let git_excluded = git_repository && git_exclude_warning.is_none();
+        warnings.extend(git_exclude_warning);
         ui::success(format_args!(
             "Savestate {}",
             if already_initialized {
@@ -76,8 +80,13 @@ impl Savestate {
         ui::field("Project", format_args!("{}", self.root.display()));
         ui::field("Store", format_args!("{}", self.store.path().display()));
         ui::success(format_args!("Snapshot scope configured"));
-        if git_repository {
+        if git_excluded {
             ui::success(format_args!("Local store excluded from Git"));
+        }
+        warnings.sort();
+        warnings.dedup();
+        for warning in warnings {
+            ui::warning(format_args!("{warning}"));
         }
         if !includes.is_empty() {
             ui::line(format_args!(
@@ -103,17 +112,16 @@ impl Savestate {
             ));
         }
         if show_next_steps {
-            ui::line(format_args!(""));
-            ui::heading("Next");
-            ui::line(format_args!(
-                "  {}",
-                ui::command("savestate integrate codex")
-            ));
-            ui::line(format_args!(
-                "  {}",
-                ui::command("savestate integrate claude")
-            ));
+            show_init_next_steps();
         }
         Ok(())
+    }
+}
+
+fn show_init_next_steps() {
+    ui::line(format_args!(""));
+    ui::heading("Next");
+    for command in ["savestate integrate codex", "savestate integrate claude"] {
+        ui::line(format_args!("  {}", ui::command(command)));
     }
 }

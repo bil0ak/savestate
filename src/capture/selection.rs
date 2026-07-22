@@ -86,7 +86,7 @@ pub(super) struct RootSelection {
     pub(super) ignored: Vec<PathBuf>,
     pub(super) sources: Vec<GitIgnoreSource>,
     pub(super) explicitly_included: Vec<PathBuf>,
-    pub(super) gitignore_rules_inactive: bool,
+    pub(super) git_fallback_notice: Option<String>,
 }
 
 pub(super) struct SelectionPolicy<'a> {
@@ -97,6 +97,13 @@ pub(super) struct SelectionPolicy<'a> {
     pub(super) include_patterns: &'a [String],
     pub(super) exclude_patterns: &'a [String],
     pub(super) recorded_scope: Option<&'a CaptureScope>,
+}
+
+struct GitRootSelection {
+    selected: BTreeSet<PathBuf>,
+    tracked: BTreeSet<PathBuf>,
+    ignored: Vec<PathBuf>,
+    sources: Vec<GitIgnoreSource>,
 }
 
 #[allow(clippy::too_many_lines, clippy::if_not_else)] // Git and explicit-scope precedence is order-sensitive.
@@ -117,92 +124,49 @@ pub(super) fn paths_for_root(
             ignored: Vec::new(),
             sources: Vec::new(),
             explicitly_included: Vec::new(),
-            gitignore_rules_inactive: false,
+            git_fallback_notice: None,
         });
     }
     let base = spec.path.clone();
-    let git = spec.repository && is_git_worktree(&base)?;
-    let exact_git_scope = respect_gitignore && git;
-    let stored_ignore = recorded_scope
-        .filter(|_| exact_git_scope)
-        .map(|scope| StoredIgnore::new(&base, &spec.id, scope))
-        .transpose()?;
-    let mut selected = BTreeSet::new();
+    let git_status = if spec.repository && respect_gitignore {
+        git_repository_status(&base)
+    } else {
+        GitRepositoryStatus::NotRepository
+    };
+    let mut exact_git_scope = false;
+    let mut git_fallback_notice = None;
+    let mut ignored = Vec::new();
+    let mut sources = Vec::new();
     let mut tracked_paths = BTreeSet::new();
-    if exact_git_scope {
-        if let Some(stored) = &stored_ignore {
-            for entry in WalkDir::new(&base)
-                .follow_links(false)
-                .into_iter()
-                .filter_entry(|entry| {
-                    if entry.path() == base {
-                        return true;
-                    }
-                    let Ok(relative) = entry.path().strip_prefix(&base) else {
-                        return false;
-                    };
-                    safe_path(relative, entry.path(), store)
-                        && !stored.is_ignored(entry.path(), entry.file_type().is_dir())
-                })
-            {
-                let entry = entry?;
-                if entry.path() != base {
-                    selected.insert(entry.path().strip_prefix(&base)?.to_path_buf());
-                }
+    let mut selected = if spec.repository && respect_gitignore && git_status.is_available() {
+        match git_root_selection(spec, policy) {
+            Ok(selection) => {
+                exact_git_scope = true;
+                tracked_paths = selection.tracked;
+                ignored = selection.ignored;
+                sources = selection.sources;
+                selection.selected
             }
-        } else {
-            let mut builder = WalkBuilder::new(&base);
-            builder
-                .follow_links(false)
-                .hidden(false)
-                .ignore(false)
-                .git_ignore(true)
-                .git_exclude(true)
-                .git_global(true)
-                .parents(true);
-            builder.current_dir(&base);
-            if let Some(path) = effective_global_excludes(&base)?
-                && let Some(error) = builder.add_ignore(path)
-            {
-                return Err(error).context("load Git global excludes");
-            }
-            for entry in builder.build() {
-                let entry = entry?;
-                if entry.path() == base {
-                    continue;
-                }
-                let relative = entry.path().strip_prefix(&base)?.to_path_buf();
-                if safe_path(&relative, entry.path(), store) {
-                    selected.insert(relative);
-                }
-            }
-        }
-        for relative in git_paths(&base, &["ls-files", "--cached", "-z"])? {
-            let live = base.join(&relative);
-            if path_exists(&live)? && safe_path(&relative, &live, store) {
-                tracked_paths.insert(relative.clone());
-                insert_with_parents(&mut selected, &relative, &base, store);
+            Err(error) => {
+                git_fallback_notice = Some(format!(
+                    "Git-aware capture is unavailable ({error}); capturing the full filesystem scope"
+                ));
+                filesystem_selection(&base, store)?
             }
         }
     } else {
-        for entry in WalkDir::new(&base)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|entry| {
-                entry.path() == base
-                    || entry
-                        .path()
-                        .strip_prefix(&base)
-                        .ok()
-                        .is_some_and(|relative| safe_path(relative, entry.path(), store))
-            })
-        {
-            let entry = entry?;
-            if entry.path() != base {
-                selected.insert(entry.path().strip_prefix(&base)?.to_path_buf());
-            }
+        let selected = filesystem_selection(&base, store)?;
+        if spec.repository && respect_gitignore {
+            let has_gitignore = selected.iter().any(|relative| {
+                relative
+                    .file_name()
+                    .is_some_and(|name| name == ".gitignore")
+                    && base.join(relative).is_file()
+            });
+            git_fallback_notice = git_status.fallback_notice(has_gitignore);
         }
-    }
+        selected
+    };
     let mut explicitly_included = BTreeSet::new();
     if let Some(scope) = recorded_scope {
         explicitly_included.extend(
@@ -251,48 +215,6 @@ pub(super) fn paths_for_root(
             }
         }
     }
-    let mut ignored = if exact_git_scope && stored_ignore.is_none() {
-        git_paths(
-            &base,
-            &[
-                "ls-files",
-                "--others",
-                "--ignored",
-                "--exclude-standard",
-                "--directory",
-                "-z",
-            ],
-        )?
-    } else {
-        Vec::new()
-    };
-    if let Some(stored) = &stored_ignore {
-        let mut walker = WalkDir::new(&base).follow_links(false).into_iter();
-        while let Some(entry) = walker.next() {
-            let entry = entry?;
-            if entry.path() == base {
-                continue;
-            }
-            let relative = entry.path().strip_prefix(&base)?.to_path_buf();
-            if !safe_path(&relative, entry.path(), store) {
-                if entry.file_type().is_dir() {
-                    walker.skip_current_dir();
-                }
-                continue;
-            }
-            if stored.is_ignored(entry.path(), entry.file_type().is_dir()) {
-                if !ignored
-                    .iter()
-                    .any(|ancestor| relative.starts_with(ancestor))
-                {
-                    ignored.push(relative.clone());
-                }
-                if entry.file_type().is_dir() {
-                    walker.skip_current_dir();
-                }
-            }
-        }
-    }
     ignored.retain(|relative| {
         let relative = clean_git_directory_path(relative);
         safe_path(relative, &base.join(relative), store)
@@ -337,32 +259,176 @@ pub(super) fn paths_for_root(
     }
     preservation.sort();
     preservation.dedup();
-    let gitignore_rules_inactive = recorded_scope.is_none()
-        && respect_gitignore
-        && spec.repository
-        && !git
-        && selected.iter().any(|relative| {
-            relative
-                .file_name()
-                .is_some_and(|name| name == ".gitignore")
-                && base.join(relative).is_file()
-        });
     let paths = selected
         .into_iter()
         .map(|relative| (relative.clone(), base.join(relative)))
         .collect();
-    let sources = if exact_git_scope {
-        git_ignore_sources(spec)?
-    } else {
-        Vec::new()
-    };
     Ok(RootSelection {
         paths,
         ignored: preservation,
         sources,
         explicitly_included: explicitly_included.into_iter().collect(),
-        gitignore_rules_inactive,
+        git_fallback_notice,
     })
+}
+
+fn filesystem_selection(base: &Path, store: &Path) -> Result<BTreeSet<PathBuf>> {
+    let mut selected = BTreeSet::new();
+    for entry in WalkDir::new(base)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            entry.path() == base
+                || entry
+                    .path()
+                    .strip_prefix(base)
+                    .ok()
+                    .is_some_and(|relative| safe_path(relative, entry.path(), store))
+        })
+    {
+        let entry = entry?;
+        if entry.path() != base {
+            selected.insert(entry.path().strip_prefix(base)?.to_path_buf());
+        }
+    }
+    Ok(selected)
+}
+
+fn git_root_selection(
+    spec: &RootManifest,
+    policy: &SelectionPolicy<'_>,
+) -> Result<GitRootSelection> {
+    let base = &spec.path;
+    let stored_ignore = policy
+        .recorded_scope
+        .map(|scope| StoredIgnore::new(base, &spec.id, scope))
+        .transpose()?;
+    let mut selected = git_selected_paths(base, policy.store, stored_ignore.as_ref())?;
+    let mut tracked = BTreeSet::new();
+    for relative in git_paths(base, &["ls-files", "--cached", "-z"])? {
+        let live = base.join(&relative);
+        if path_exists(&live)? && safe_path(&relative, &live, policy.store) {
+            tracked.insert(relative.clone());
+            insert_with_parents(&mut selected, &relative, base, policy.store);
+        }
+    }
+    let ignored = if let Some(stored) = &stored_ignore {
+        stored_ignored_paths(base, policy.store, stored)?
+    } else {
+        git_paths(
+            base,
+            &[
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "--directory",
+                "-z",
+            ],
+        )?
+    };
+    let sources = if let Some(scope) = policy.recorded_scope {
+        scope
+            .git_ignore_sources
+            .iter()
+            .filter(|source| source.root_id == spec.id)
+            .cloned()
+            .collect()
+    } else {
+        git_ignore_sources(spec)?
+    };
+    Ok(GitRootSelection {
+        selected,
+        tracked,
+        ignored,
+        sources,
+    })
+}
+
+fn git_selected_paths(
+    base: &Path,
+    store: &Path,
+    stored_ignore: Option<&StoredIgnore>,
+) -> Result<BTreeSet<PathBuf>> {
+    let mut selected = BTreeSet::new();
+    if let Some(stored) = stored_ignore {
+        for entry in WalkDir::new(base)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| {
+                if entry.path() == base {
+                    return true;
+                }
+                let Ok(relative) = entry.path().strip_prefix(base) else {
+                    return false;
+                };
+                safe_path(relative, entry.path(), store)
+                    && !stored.is_ignored(entry.path(), entry.file_type().is_dir())
+            })
+        {
+            let entry = entry?;
+            if entry.path() != base {
+                selected.insert(entry.path().strip_prefix(base)?.to_path_buf());
+            }
+        }
+    } else {
+        let mut builder = WalkBuilder::new(base);
+        builder
+            .follow_links(false)
+            .hidden(false)
+            .ignore(false)
+            .git_ignore(true)
+            .git_exclude(true)
+            .git_global(true)
+            .parents(true);
+        builder.current_dir(base);
+        if let Some(path) = effective_global_excludes(base)?
+            && let Some(error) = builder.add_ignore(path)
+        {
+            return Err(error).context("load Git global excludes");
+        }
+        for entry in builder.build() {
+            let entry = entry?;
+            if entry.path() == base {
+                continue;
+            }
+            let relative = entry.path().strip_prefix(base)?.to_path_buf();
+            if safe_path(&relative, entry.path(), store) {
+                selected.insert(relative);
+            }
+        }
+    }
+    Ok(selected)
+}
+
+fn stored_ignored_paths(base: &Path, store: &Path, stored: &StoredIgnore) -> Result<Vec<PathBuf>> {
+    let mut ignored = Vec::new();
+    let mut walker = WalkDir::new(base).follow_links(false).into_iter();
+    while let Some(entry) = walker.next() {
+        let entry = entry?;
+        if entry.path() == base {
+            continue;
+        }
+        let relative = entry.path().strip_prefix(base)?.to_path_buf();
+        if !safe_path(&relative, entry.path(), store) {
+            if entry.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
+            continue;
+        }
+        if stored.is_ignored(entry.path(), entry.file_type().is_dir()) {
+            if !ignored
+                .iter()
+                .any(|ancestor: &PathBuf| relative.starts_with(ancestor))
+            {
+                ignored.push(relative.clone());
+            }
+            if entry.file_type().is_dir() {
+                walker.skip_current_dir();
+            }
+        }
+    }
+    Ok(ignored)
 }
 
 pub(super) fn allowed(relative: &Path, path: &Path, excludes: &GlobSet, store: &Path) -> bool {

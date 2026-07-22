@@ -17,12 +17,7 @@ pub fn capture(
         enabled_sqlite,
     )?;
     let mut notices = Vec::new();
-    if discovery.gitignore_rules_inactive {
-        notices.push(
-            ".gitignore found, but its rules are ignored because this is not a Git repository; capturing the full non-Git scope"
-                .to_owned(),
-        );
-    }
+    notices.extend(discovery.git_fallback_notices.iter().cloned());
     if let Some(notice) = scope_notice(config, discovery.logical_paths, discovery.logical_bytes)? {
         notices.push(notice);
     }

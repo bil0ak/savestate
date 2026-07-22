@@ -164,6 +164,31 @@ pub(super) fn savestate_on_path() -> bool {
         .is_ok_and(|status| status.success())
 }
 
+pub(super) fn init_git_discovery(root: &Path) -> (bool, Vec<PathBuf>, Vec<String>) {
+    let status = capture::git_repository_status(root);
+    if !status.is_available() {
+        let warnings = status
+            .unavailable_reason()
+            .map(|reason| {
+                vec![format!(
+                    "Git integration is unavailable ({reason}); continuing without Git-specific setup"
+                )]
+            })
+            .unwrap_or_default();
+        return (false, Vec::new(), warnings);
+    }
+    match detect_ignored_includes(root) {
+        Ok(includes) => (true, includes, Vec::new()),
+        Err(error) => (
+            true,
+            Vec::new(),
+            vec![format!(
+                "Git could not detect ignored initialization candidates ({error}); continuing without automatic includes"
+            )],
+        ),
+    }
+}
+
 pub(super) fn codex_trust_recorded(hooks: &Path) -> Result<Option<bool>> {
     let codex_home = if let Some(path) = std::env::var_os("CODEX_HOME") {
         PathBuf::from(path)
@@ -188,72 +213,145 @@ pub(super) fn codex_trust_recorded(hooks: &Path) -> Result<Option<bool>> {
     ))
 }
 
-pub(super) fn ensure_git_exclude(root: &Path, store_root: &Path) -> Result<()> {
-    let inside = Command::new("git")
-        .current_dir(root)
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output();
-    if !inside.is_ok_and(|output| output.status.success()) {
-        return Ok(());
+enum OptionalGit<T> {
+    Available(T),
+    Unavailable(String),
+}
+
+pub(super) fn ensure_git_exclude(root: &Path, store_root: &Path) -> Result<Option<String>> {
+    let status = capture::git_repository_status(root);
+    if !status.is_available() {
+        return Ok(status.unavailable_reason().map(|reason| {
+            format!(
+                "Git integration is unavailable ({reason}); continuing without updating Git excludes"
+            )
+        }));
     }
+    let patterns = match git_exclude_patterns(root, store_root)? {
+        OptionalGit::Available(patterns) => patterns,
+        OptionalGit::Unavailable(warning) => return Ok(Some(warning)),
+    };
+    let path = match git_exclude_path(root) {
+        OptionalGit::Available(path) => path,
+        OptionalGit::Unavailable(warning) => return Ok(Some(warning)),
+    };
+    Ok(update_git_exclude(&path, &patterns).err())
+}
+
+fn git_exclude_patterns(root: &Path, store_root: &Path) -> Result<OptionalGit<Vec<String>>> {
     let mut patterns = vec!["/.savestate-transaction/".to_owned()];
     if let Ok(relative) = store_root.strip_prefix(root) {
         if relative.as_os_str().is_empty() {
             bail!("snapshot store cannot be the project root");
         }
         let relative = relative.to_string_lossy().replace('\\', "/");
-        let tracked = Command::new("git")
+        let tracked = match Command::new("git")
             .current_dir(root)
             .args(["ls-files", "--error-unmatch", "--"])
             .arg(relative.as_str())
             .output()
-            .context("check whether the snapshot store is tracked")?;
+        {
+            Ok(output) => output,
+            Err(error) => {
+                return Ok(OptionalGit::Unavailable(format!(
+                    "Git could not check the snapshot store ({error}); continuing without updating Git excludes"
+                )));
+            }
+        };
         if tracked.status.success() {
             bail!("snapshot store {relative} is tracked by Git; untrack it before continuing");
         }
+        if tracked.status.code() != Some(1) {
+            return Ok(OptionalGit::Unavailable(format!(
+                "Git could not check the snapshot store ({}); continuing without updating Git excludes",
+                git_command_failure(&tracked.stderr)
+            )));
+        }
         patterns.push(format!("/{}/", relative.trim_matches('/')));
     }
-    let output = Command::new("git")
+    Ok(OptionalGit::Available(patterns))
+}
+
+fn git_exclude_path(root: &Path) -> OptionalGit<PathBuf> {
+    let output = match Command::new("git")
         .current_dir(root)
         .args(["rev-parse", "--git-path", "info/exclude"])
         .output()
-        .context("locate Git repository exclude file")?;
+    {
+        Ok(output) => output,
+        Err(error) => {
+            return OptionalGit::Unavailable(format!(
+                "Git could not locate its exclude file ({error}); continuing without updating Git excludes"
+            ));
+        }
+    };
     if !output.status.success() {
-        bail!("could not locate Git repository exclude file");
+        return OptionalGit::Unavailable(format!(
+            "Git could not locate its exclude file ({}); continuing without updating Git excludes",
+            git_command_failure(&output.stderr)
+        ));
     }
-    let raw = String::from_utf8(output.stdout)?.trim().to_owned();
+    let raw = match String::from_utf8(output.stdout) {
+        Ok(raw) => raw.trim().to_owned(),
+        Err(error) => {
+            return OptionalGit::Unavailable(format!(
+                "Git returned an invalid exclude path ({error}); continuing without updating Git excludes"
+            ));
+        }
+    };
     let path = PathBuf::from(raw);
-    let path = if path.is_absolute() {
+    OptionalGit::Available(if path.is_absolute() {
         path
     } else {
         root.join(path)
-    };
+    })
+}
+
+fn update_git_exclude(path: &Path, patterns: &[String]) -> std::result::Result<(), String> {
     let mut source = if path.exists() {
-        fs::read_to_string(&path)?
+        match fs::read_to_string(path) {
+            Ok(source) => source,
+            Err(error) => {
+                return Err(format!(
+                    "Git's exclude file could not be read ({error}); continuing without updating it"
+                ));
+            }
+        }
     } else {
         String::new()
     };
     let mut changed = false;
     for pattern in patterns {
-        if !source.lines().any(|line| line.trim() == pattern) {
+        if !source.lines().any(|line| line.trim() == pattern.as_str()) {
             if !source.ends_with('\n') && !source.is_empty() {
                 source.push('\n');
             }
-            source.push_str(&pattern);
+            source.push_str(pattern);
             source.push('\n');
             changed = true;
         }
     }
     if changed {
-        store::atomic_write(&path, source.as_bytes())?;
+        if let Err(error) = store::atomic_write(path, source.as_bytes()) {
+            return Err(format!(
+                "Git's exclude file could not be updated ({error}); continuing without updating it"
+            ));
+        }
     }
     Ok(())
 }
 
+fn git_command_failure(stderr: &[u8]) -> String {
+    String::from_utf8_lossy(stderr)
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .map_or_else(
+            || "Git command failed".to_owned(),
+            |line| line.trim().to_owned(),
+        )
+}
+
 pub(super) fn detect_ignored_includes(root: &Path) -> Result<Vec<PathBuf>> {
-    if !root.join(".git").exists() {
-        return Ok(Vec::new());
-    }
     let output = Command::new("git")
         .current_dir(root)
         .args([
