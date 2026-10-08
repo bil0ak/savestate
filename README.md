@@ -192,6 +192,12 @@ Database restore is intentionally gated. PostgreSQL restore requires explicit co
 
 Savestate is synchronous, CLI-first, and intentionally conservative. Windows support is experimental.
 
+## Team pilots
+
+Using Claude Code or Codex on an existing application? [Request a free two-week team pilot](https://savestatecli.dev/teams) for founder-led setup and recovery practice on a development project. Teams, agencies, and solo developers are welcome.
+
+The CLI is free under MIT. Shared checkpoint policies, recovery visibility, and ongoing team support are proposed commercial offerings being shaped by early feedback.
+
 ## License
 
 MIT © Bilal Akkil. See the [license](https://github.com/bil0ak/savestate/blob/main/LICENSE).
